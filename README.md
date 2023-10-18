@@ -17,8 +17,14 @@ mosquitto_sub -h localhost -t "Example/Output"
 
 ```
 cd example
-g++ --std=c++14 -Wall -Wextra -I../include ../src/MQTT.cpp Example.cpp -o example `pkg-config --cflags --libs libmosquitto`
+g++ --std=c++11 -Wall -Wextra -I../include ../src/MQTT.cpp Example.cpp -o example `pkg-config --cflags --libs libmosquitto`
 ./example
+```
+
+You will see (may be different from your case):
+```
+Connected to MQTT broker with error code 0
+Message 1 subscribed. Granted QOS: 0
 ```
 
 - In a third Linux console, a publisher will send messages to our application. Type:
@@ -29,14 +35,15 @@ mosquitto_pub -h localhost -t "Example/Input" -m "Hello"
 You will see:
 - In the first console:
 ```
-Connected to MQTT broker
-MQTT subscribe to 'Example/Input'
-Received Message: Hello from Topic: Example/Input
-```
-
-- In the first console:
-```
 Hello
 ```
 
-Your MQTT client is functional :)
+- In the second console:
+```
+Received message 0: "Hello" from topic: "Example/Input" size: 5 qos: 0
+Message 2 published
+```
+
+In this example, once a message has been received the application is closing.
+
+Your C++ asynchronous MQTT client is functional :)
