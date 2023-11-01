@@ -212,7 +212,7 @@ private: // Callbacks
     //! the callback completes.  The client should make copies of any of the data
     //! it requires.
     //-------------------------------------------------------------------------
-    virtual void onMessageReceived(const Message& message) = 0;
+    virtual void onMessageReceived(const MQTT::Message& message) = 0;
 
     //-------------------------------------------------------------------------
     //! \brief Callback called when a disconnection with the MQTT broker occured.
