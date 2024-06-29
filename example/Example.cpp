@@ -18,17 +18,8 @@ public:
     //! \brief Default constructor with non blocking connection to the MQTT
     //! broker.
     //-------------------------------------------------------------------------
-    MQTTExample()
-    {
-        // Connect is not blocking! Uncomment and set your prefered client id
-        // if needed!
-        connect(/* "my client id", */"localhost", 1883);
-    }
-
-    //-------------------------------------------------------------------------
-    //! \brief In this example, we halt when the client receives a new message.
-    //-------------------------------------------------------------------------
-    bool isRunning() const { return m_running; }
+    MQTTExample() : MQTT(/* "my client id", */"localhost", 1883)
+    {}
 
 private: // override MQTT callbacks
 
@@ -39,29 +30,23 @@ private: // override MQTT callbacks
     {
         std::cout << "Connected to MQTT broker with error code " << rc << std::endl;
 
-        subscribe("Example/Input", MQTT::QoS::QoS0);
-    }
+        subscribe("Input", [&](const MQTT::Message& msg){
+            std::string topic(static_cast<const char*>(msg.topic));
 
-    //-------------------------------------------------------------------------
-    //! \brief Callback when this class is has received a new message from the
-    //! MQTT broker.
-    //-------------------------------------------------------------------------
-    virtual void onMessageReceived(const MQTT::Message& msg) override
-    {
-        // We exploit the fact that mosquitto appends an extra 0 bytes that makes
-        // ad direct reading as a C string.
-        std::string message(static_cast<const char*>(msg.payload));
-        std::string topic(static_cast<const char*>(msg.topic));
-
-        std::cout << "Received message " << msg.mid
-                  << ": \"" << message << "\""
-                  << " from topic: `"" << topic << "\""
-                  << " size: " << msg.payloadlen
-                  << " qos: " << msg.qos
-                  << std::endl;
-        publish("Example/Output", message, MQTT::QoS::QoS0);
-
-        m_running = false;
+            // We exploit the fact that mosquitto appends an extra 0 bytes
+            // that makes a direct reading as a C++ string.
+            std::string message(static_cast<const char*>(msg.payload));
+            // Alternative:
+            // std::string const& message = msg.to<std::string>();
+            std::cout << "Received message " << msg.mid
+                    << ": \"" << message << "\""
+                    << " from topic: '" << topic << "'"
+                    << " size: " << msg.payloadlen
+                    << " qos: " << msg.qos
+                    << std::endl;
+            // Send back the message.
+            publish("Output", message + " back", MQTT::QoS::QoS0);
+        }, MQTT::QoS::QoS0);
     }
 
     //-------------------------------------------------------------------------
@@ -71,7 +56,6 @@ private: // override MQTT callbacks
     //-------------------------------------------------------------------------
     virtual void onDisconnected(int rc)
     {
-        m_running = false;
         std::cout << "Disconnected with error code: " << rc << std::endl;
     }
 
@@ -89,7 +73,7 @@ private: // override MQTT callbacks
     //-------------------------------------------------------------------------
     virtual void onSubscribed(int mid, int qos_count, const int *granted_qos)
     {
-        std::cout << "Message " << mid << " subscribed. Granted QOS:";
+        std::cout << "Topic " << mid << " subscribed. Granted QOS:";
         for (int i = 0; i < qos_count; ++i)
         {
             std::cout << " " << granted_qos[i];
@@ -104,11 +88,6 @@ private: // override MQTT callbacks
     {
         std::cout << "Message " << mid << " no longer subscribed !" << std::endl;
     }
-
-private:
-
-    // In this example we quit when we have received a
-    std::atomic<bool> m_running { true };
 };
 
 // *****************************************************************************
@@ -119,7 +98,7 @@ int main()
 {
     MQTTExample client; // Client is asynchronous.
 
-    while (client.isRunning())
+    while (true)
     {
         std::this_thread::sleep_for(std::chrono::seconds(1));
     }

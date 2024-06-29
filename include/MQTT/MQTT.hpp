@@ -31,6 +31,8 @@
 #  include <string>
 #  include <vector>
 #  include <cassert>
+#  include <map>
+#  include <functional>
 
 // ****************************************************************************
 //! \brief Base asynchronous MQTT v3 class based on the mosquitto implementation.
@@ -88,7 +90,7 @@ public:
     struct Message : mosquitto_message
     {
         //---------------------------------------------------------------------
-        //! \brief Helper opy the payload content into the given container.
+        //! \brief Helper copy the payload content into the given container.
         //! \param[inout] container where to store the payload.
         //! \param[in] clear if set to true the container has its content removed
         //! before payload is stored. Else, payload content is appeneded.
@@ -102,21 +104,35 @@ public:
         //! template. Beware this returns a reference on a temporary memory that
         //! will be freed by the library after the callback completes. The client
         //! should make a copy of the class if he desires to keep it.
-        //! \fixme NOT YET TESTED!
         //---------------------------------------------------------------------
         template<class T>
-        T& to()
+        T const& to() const
         {
-            assert((payloadlen == sizeof (T)) && "incompatible size");
-            return *reinterpret_cast<T*>(payload);
+            assert((size_t(payloadlen) == sizeof(T)) && "incompatible size");
+            return *static_cast<const T*>(payload);
         }
     };
 
     //-------------------------------------------------------------------------
-    //! \brief Dummy constructor.
-    //! No internal calls made execept calling the init of the mosquitto library.
+    //! \brief Callback triggered when a new message is received.
+    //-------------------------------------------------------------------------
+    using Callback = std::function<void(Message const& message)>;
+
+    //-------------------------------------------------------------------------
+    //! \brief Dummy constructor. No internal calls made execept calling the
+    //! init of the mosquitto library. You have to call connect() later.
     //-------------------------------------------------------------------------
     MQTT();
+
+    //-------------------------------------------------------------------------
+    //! \brief Constructor with connection.
+    //-------------------------------------------------------------------------
+    MQTT(std::string const& addr, size_t const port = 1883);
+
+    //-------------------------------------------------------------------------
+    //! \brief Constructor with connection.
+    //-------------------------------------------------------------------------
+    MQTT(std::string const& id, std::string const& addr, size_t const port = 1883);
 
     //-------------------------------------------------------------------------
     //! \brief Release memory.
@@ -148,12 +164,24 @@ public:
     bool connect(std::string const& id, std::string const& addr, size_t const port = 1883);
 
     //-------------------------------------------------------------------------
-    //! \brief Subscription to given topic and quality of service.
+    //! \brief Subscription to given topic and quality of service. No callback
+    //! is provided in this method. As consequence, you will have to override
+    //! the method onConnected(int).
     //! \param[in] topic the desired topic.
-    //! \param[in] qos the dsired quality of service.
+    //! \param[in] qos the desired quality of service.
     //! \return true if not internal error occured, else return false.
     //-------------------------------------------------------------------------
     bool subscribe(std::string const& topic, QoS const qos);
+
+    //-------------------------------------------------------------------------
+    //! \brief Subscription to given topic and quality of service. You do not
+    //! have to override the method onConnected(int).
+    //! \param[in] topic the desired topic.
+    //! \param[in] qos the desired quality of service.
+    //! \param[in] callback the reaction to received message.
+    //! \return true if not internal error occured, else return false.
+    //-------------------------------------------------------------------------
+    bool subscribe(std::string const& topic, Callback callback, QoS const qos);
 
     //-------------------------------------------------------------------------
     //! \brief Remove the subscription of the given topic.
@@ -188,7 +216,7 @@ public:
     //! \param[in] size the number of bytes of the payload.
     //! \return true if not internal error occured, else return false.
     //-------------------------------------------------------------------------
-    bool publish(std::string const& topic, const uint8_t* payload, size_t const size, QoS const qos);
+    bool publish(std::string const& topic, uint8_t const* payload, size_t const size, QoS const qos);
 
 protected:
 
@@ -212,7 +240,7 @@ private: // Callbacks
     //! the callback completes.  The client should make copies of any of the data
     //! it requires.
     //-------------------------------------------------------------------------
-    virtual void onMessageReceived(const MQTT::Message& message) = 0;
+    virtual void onMessageReceived(MQTT::Message const& message);
 
     //-------------------------------------------------------------------------
     //! \brief Callback called when a disconnection with the MQTT broker occured.
@@ -248,7 +276,7 @@ private: // Callbacks
 
 private:
 
-    bool doConnection(const char* client_id, const char* addr, size_t const port);
+    bool doConnection(char const* client_id, char const* addr, size_t const port);
 
     static void on_connected_wrapper(struct mosquitto* /*mosqitto*/, void* userdata, int rc)
     {
@@ -304,8 +332,20 @@ private:
 
     //! \brief The instance of the mosquitto library.
     struct mosquitto *m_mosquitto = nullptr;
+    //! \brief Callbacks to subscribed topics
+    std::map<std::string, MQTT::Callback> m_callbacks;
     //! \brief Hold the last error.
     std::string m_error;
 };
+
+//-----------------------------------------------------------------------------
+template<>
+inline std::string const& MQTT::Message::to<std::string>() const
+{
+    static std::string msg;
+    
+    msg = static_cast<const char*>(payload);
+    return msg;
+}
 
 #endif

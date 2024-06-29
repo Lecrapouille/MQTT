@@ -52,20 +52,34 @@ void MQTT::libMosquittoCleanUp()
 }
 
 //-----------------------------------------------------------------------------
-size_t MQTT::Message::store(std::vector<uint8_t>& payload, bool const clear)
+size_t MQTT::Message::store(std::vector<uint8_t>& buffer, bool const clear)
 {
     if (clear) {
-        payload.clear();
+        buffer.clear();
     }
-    payload.resize(payload.size() + this->payloadlen);
-    std::memcpy(&payload[payload.size() - this->payloadlen], this->payload, this->payloadlen * sizeof(uint8_t));
-    return payload.size();
+    buffer.resize(buffer.size() + this->payloadlen);
+    std::memcpy(&buffer[buffer.size() - this->payloadlen], this->payload, this->payloadlen * sizeof(uint8_t));
+    return buffer.size();
 }
 
 //-----------------------------------------------------------------------------
 MQTT::MQTT()
 {
     libMosquittoInit();
+}
+
+//-----------------------------------------------------------------------------
+MQTT::MQTT(std::string const& addr, size_t const port)
+{
+    libMosquittoInit();
+    connect(addr, port);
+}
+
+//-----------------------------------------------------------------------------
+MQTT::MQTT(std::string const& id, std::string const& addr, size_t const port)
+{
+    libMosquittoInit();
+    connect(id, addr, port);
 }
 
 //-----------------------------------------------------------------------------
@@ -136,7 +150,8 @@ bool MQTT::doConnection(const char* client_id, const char* addr, size_t const po
 }
 
 //-----------------------------------------------------------------------------
-bool MQTT::publish(std::string const& topic, const uint8_t* payload, size_t const size, QoS const qos)
+bool MQTT::publish(std::string const& topic, const uint8_t* payload,
+                   size_t const size, QoS const qos)
 {
     assert((topic.size() != 0u) && "topic name shall not be empty");
 
@@ -150,7 +165,8 @@ bool MQTT::publish(std::string const& topic, const uint8_t* payload, size_t cons
 }
 
 //-----------------------------------------------------------------------------
-bool MQTT::publish(std::string const& topic, std::vector<uint8_t> const& payload, QoS const qos)
+bool MQTT::publish(std::string const& topic, std::vector<uint8_t> const& payload,
+                   QoS const qos)
 {
     assert((topic.size() != 0u) && "topic name shall not be empty");
 
@@ -192,6 +208,8 @@ bool MQTT::unsubscribe(std::string const& topic)
         m_error = mosquitto_strerror(rc);
         return false;
     }
+
+    m_callbacks.erase(topic);
     return true;
 }
 
@@ -206,5 +224,28 @@ bool MQTT::subscribe(std::string const& topic, QoS const qos)
         m_error = mosquitto_strerror(rc);
         return false;
     }
+
     return true;
+}
+
+//-----------------------------------------------------------------------------
+bool MQTT::subscribe(std::string const& topic, Callback callback, QoS const qos)
+{
+    if (subscribe(topic, qos))
+    {
+        m_callbacks[topic] = callback;
+        return true;
+    }
+
+    return false;
+}
+
+//-----------------------------------------------------------------------------
+void MQTT::onMessageReceived(MQTT::Message const& msg)
+{
+    auto const& callback = m_callbacks.find(msg.topic);
+    if (callback != m_callbacks.end())
+    {
+        callback->second(msg);
+    }
 }

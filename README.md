@@ -10,7 +10,7 @@ You will need small code to make your application running with a MQTT client.
 
 - In a first Linux console, a subscriber will echo messages from our application. Type:
 ```
-mosquitto_sub -h localhost -t "Example/Output"
+mosquitto_sub -h localhost -t "Output"
 ```
 
 - In a second Linux console, compile and launch our application. Type:
@@ -24,26 +24,24 @@ g++ --std=c++11 -Wall -Wextra -I../include ../src/MQTT.cpp Example.cpp -o exampl
 You will see (may be different from your case):
 ```
 Connected to MQTT broker with error code 0
-Message 1 subscribed. Granted QOS: 0
+Topic 1 subscribed. Granted QOS: 0
 ```
 
 - In a third Linux console, a publisher will send messages to our application. Type:
 ```
-mosquitto_pub -h localhost -t "Example/Input" -m "Hello"
+mosquitto_pub -h localhost -t "Input" -m "Hello"
 ```
 
 You will see:
 - In the first console:
 ```
-Hello
+Hello back
 ```
 
 - In the second console:
 ```
-Received message 0: "Hello" from topic: "Example/Input" size: 5 qos: 0
+Received message 0: "Hello" from topic: "Input" size: 5 qos: 0
 Message 2 published
 ```
-
-In this example, once a message has been received the application is closing.
 
 Your C++ asynchronous MQTT client is functional :)
