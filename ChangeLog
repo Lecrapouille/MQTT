@@ -1,2 +1,5 @@
+Version 0.2.0
+        * Redo the whole API: use lambda callbacks instead of overriding methods.
+
 Version 0.1.0
         * Initial version
