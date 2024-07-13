@@ -25,104 +25,68 @@
 //*****************************************************************************
 
 #include "MQTT/MQTT.hpp"
-#include <cstring>
+#include <iostream>
 
-//-----------------------------------------------------------------------------
-void MQTT::libMosquittoInit()
+// *************************************************************************
+//! \brief std::error_code instead of throw() or errno.
+// *************************************************************************
+struct MQTTErrorCategory : std::error_category
 {
-    size_t& counter = libMosquittoCountInstances();
-    if (counter == 0u) {
-        // std::cout << "Call mosquitto_lib_init" << std::endl;
-        mosquitto_lib_init();
-    }
-    counter += 1u;
-}
-
-//-----------------------------------------------------------------------------
-void MQTT::libMosquittoCleanUp()
-{
-    size_t& counter = libMosquittoCountInstances();
-    assert((counter != 0u) && "invalid counter");
-
-    counter -= 1u;
-    if (counter == 0u) {
-        // std::cout << "Call mosquitto_lib_cleanup" << std::endl;
-        mosquitto_lib_cleanup();
-    }
-}
-
-//-----------------------------------------------------------------------------
-size_t MQTT::Message::store(std::vector<uint8_t>& buffer, bool const clear)
-{
-    if (clear) {
-        buffer.clear();
-    }
-    buffer.resize(buffer.size() + this->payloadlen);
-    std::memcpy(&buffer[buffer.size() - this->payloadlen], this->payload, this->payloadlen * sizeof(uint8_t));
-    return buffer.size();
-}
-
-//-----------------------------------------------------------------------------
-MQTT::MQTT()
-{
-    libMosquittoInit();
-}
-
-//-----------------------------------------------------------------------------
-MQTT::MQTT(std::string const& addr, size_t const port)
-{
-    libMosquittoInit();
-    connect(addr, port);
-}
-
-//-----------------------------------------------------------------------------
-MQTT::MQTT(std::string const& id, std::string const& addr, size_t const port)
-{
-    libMosquittoInit();
-    connect(id, addr, port);
-}
-
-//-----------------------------------------------------------------------------
-MQTT::~MQTT()
-{
-    if (m_mosquitto != nullptr) {
-        mosquitto_destroy(m_mosquitto);
-    }
-    libMosquittoCleanUp();
-}
-
-//-----------------------------------------------------------------------------
-bool MQTT::connect(std::string const& client_id, std::string const& addr, size_t const port)
-{
-    if ((client_id.size() == 0u) || (client_id.size() > 23u))
+    virtual const char* name() const noexcept override { return "MQTT"; }
+    virtual std::string message(int ec) const override
     {
-        m_error = "Invalid number of char defining the client ID";
+        if (!custom_message.empty())
+            return custom_message;
+        return mosquitto_strerror(ec);
+    }
+
+    std::string custom_message;
+};
+
+// -----------------------------------------------------------------------------
+static MQTTErrorCategory s_mqtt_error_category;
+
+// -----------------------------------------------------------------------------
+static std::error_code make_error_code(int ec)
+{
+    return { ec, s_mqtt_error_category };
+}
+
+// -----------------------------------------------------------------------------
+static std::error_code make_error_code(int ec, std::string const& message)
+{
+    s_mqtt_error_category.custom_message = message;
+    return { ec, s_mqtt_error_category };
+}
+
+//-----------------------------------------------------------------------------
+bool MQTT::libMosquittoInit()
+{
+    size_t& counter = libMosquittoCountInstances();
+    if (++counter > 1u)
+        return true;
+    
+    //std::cout << "Call mosquitto_lib_init" << std::endl;
+    int rc = mosquitto_lib_init();
+    if (rc != MOSQ_ERR_SUCCESS)
+    {
+        m_mosquitto = nullptr;
+        m_status = MQTT::Status::IN_DEFECT;
+        m_error = make_error_code(rc);
         return false;
     }
-    return doConnection(client_id.c_str(), addr.c_str(), port);
+    return true;
 }
 
 //-----------------------------------------------------------------------------
-bool MQTT::connect(std::string const& addr, size_t const port)
+bool MQTT::instantiate(char const* client_id, const bool clean_session)
 {
-    return doConnection(nullptr, addr.c_str(), port);
-}
-
-//-----------------------------------------------------------------------------
-bool MQTT::doConnection(const char* client_id, const char* addr, size_t const port)
-{
+    m_mosquitto = mosquitto_new(client_id, clean_session, this);
     if (m_mosquitto == nullptr)
     {
-        m_mosquitto = mosquitto_new(client_id, true, this);
-        if (m_mosquitto == nullptr)
-        {
-            m_error = "MQTT Error: cannot malloc mosquitto";
-            return false;
-        }
-    }
-    else
-    {
-        mosquitto_disconnect(m_mosquitto);
+        m_status = MQTT::Status::IN_DEFECT;
+        m_error = make_error_code(MOSQ_ERR_NOMEM, "MQTT Error: cannot malloc mosquitto");
+        return false;
     }
 
     mosquitto_connect_callback_set(m_mosquitto, on_connected_wrapper);
@@ -131,18 +95,86 @@ bool MQTT::doConnection(const char* client_id, const char* addr, size_t const po
     mosquitto_subscribe_callback_set(m_mosquitto, on_subscribed_wrapper);
     mosquitto_unsubscribe_callback_set(m_mosquitto, on_unsubscribed_wrapper);
     mosquitto_message_callback_set(m_mosquitto, on_message_received_wrapper);
+    return true;
+}
 
-    int rc = mosquitto_connect(m_mosquitto, addr, int(port), 60);
+//-----------------------------------------------------------------------------
+void MQTT::libMosquittoCleanUp()
+{
+    size_t& counter = libMosquittoCountInstances();
+    if (--counter == 0u)
+    {
+        //std::cout << "Call mosquitto_lib_cleanup" << std::endl;
+        mosquitto_lib_cleanup();
+    }
+}
+
+//-----------------------------------------------------------------------------
+MQTT::MQTT(MQTT::Settings const& settings)
+{
+    if (settings.client_id.size() > 23u)
+    {
+        m_error = make_error_code(MOSQ_ERR_INVAL,
+            "Invalid number of char defining the client ID");
+    }
+    else if (libMosquittoInit())
+    {
+        instantiate(settings.client_id.size() == 0u ? nullptr :
+                    settings.client_id.c_str(), 
+                    settings.clean_session == MQTT::Settings::CLEAN_SESSION);
+    }
+}
+
+//-----------------------------------------------------------------------------
+MQTT::~MQTT()
+{
+    if (m_mosquitto != nullptr)
+    {
+        mosquitto_disconnect(m_mosquitto);
+        mosquitto_destroy(m_mosquitto);
+    }
+    libMosquittoCleanUp();
+}
+
+//-----------------------------------------------------------------------------
+bool MQTT::disconnect()
+{
+    if (m_mosquitto == nullptr)
+        return false;
+
+    int rc = mosquitto_disconnect(m_mosquitto);
     if (rc != MOSQ_ERR_SUCCESS)
     {
-        m_error = mosquitto_strerror(rc);
+        m_error = make_error_code(rc);
+        return false;
+    }
+    return true;
+}
+
+//-----------------------------------------------------------------------------
+bool MQTT::connect(Connection const settings, MQTT::ConnectionCallback onConnected,
+                   MQTT::ConnectionCallback onDisconnected)
+{
+    if (m_mosquitto == nullptr)
+        return false;
+
+    if (m_status == MQTT::Status::CONNECTED)
+        return true;
+
+    m_callbacks.connection = onConnected;
+    m_callbacks.disconnection = onDisconnected;
+    int rc = mosquitto_connect(m_mosquitto, settings.address.c_str(),
+                               int(settings.port), int(settings.timeout.count()));
+    if (rc != MOSQ_ERR_SUCCESS)
+    {
+        m_error = make_error_code(rc);
         return false;
     }
 
     rc = mosquitto_loop_start(m_mosquitto);
     if (rc != MOSQ_ERR_SUCCESS)
     {
-        m_error = mosquitto_strerror(rc);
+        m_error = make_error_code(rc);
         return false;
     }
 
@@ -150,102 +182,131 @@ bool MQTT::doConnection(const char* client_id, const char* addr, size_t const po
 }
 
 //-----------------------------------------------------------------------------
-bool MQTT::publish(std::string const& topic, const uint8_t* payload,
-                   size_t const size, QoS const qos)
+void MQTT::on_connected_wrapper(struct mosquitto* /*mosqitto*/, void* userdata, int rc)
 {
-    assert((topic.size() != 0u) && "topic name shall not be empty");
+    MQTT* mqtt = static_cast<MQTT*>(userdata);
+    assert((mqtt != nullptr) && "NULL pointer passed as param");
+    mqtt->m_status = MQTT::Status::CONNECTED;
+    mqtt->m_callbacks.reception.clear();
+    if (mqtt->m_callbacks.connection != nullptr)
+    {
+        mqtt->m_callbacks.connection(rc);
+    }
+    else
+    {
+        mqtt->onConnected(rc);
+    }
+}
 
-    int rc = mosquitto_publish(m_mosquitto, nullptr, topic.c_str(), size, payload, int(qos), false);
+//-----------------------------------------------------------------------------
+void MQTT::on_disconnected_wrapper(struct mosquitto* /*mosqitto*/, void* userdata, int rc)
+{
+    MQTT* mqtt = static_cast<MQTT*>(userdata);
+    assert((mqtt != nullptr) && "NULL pointer passed as param");
+    mqtt->m_status = MQTT::Status::DISCONNECTED;
+    if (mqtt->m_callbacks.disconnection != nullptr)
+    {
+        mqtt->m_callbacks.disconnection(rc);
+    }
+    else
+    {
+        mqtt->onDisconnected(rc);
+    }
+    mqtt->m_callbacks.connection = nullptr;
+    mqtt->m_callbacks.disconnection = nullptr;
+    mqtt->m_callbacks.reception.clear();
+}
+
+//-----------------------------------------------------------------------------
+bool MQTT::publish(MQTT::Topic& topic, const uint8_t* payload, size_t const size, QoS const qos)
+{
+    if (topic.name.size() == 0u)
+    {
+        m_error = make_error_code(MOSQ_ERR_INVAL, "topic name shall not be empty");
+        return false;
+    }
+
+    if ((payload == nullptr) && (size != 0u))
+    {
+        m_error = make_error_code(MOSQ_ERR_INVAL, "invalid payload content or payload size");
+        return false;
+    }
+
+    int rc = mosquitto_publish(m_mosquitto, &topic.id, topic.name.c_str(), size,
+                               payload, int(qos), false);
     if (rc != MOSQ_ERR_SUCCESS)
     {
-        m_error = mosquitto_strerror(rc);
+        m_error = make_error_code(rc);
         return false;
     }
     return true;
 }
 
 //-----------------------------------------------------------------------------
-bool MQTT::publish(std::string const& topic, std::vector<uint8_t> const& payload,
+bool MQTT::publish(MQTT::Topic& topic, std::vector<uint8_t> const& payload,
                    QoS const qos)
 {
-    assert((topic.size() != 0u) && "topic name shall not be empty");
+    return publish(topic, payload.data(), payload.size(), qos);
+}
 
-    int rc = mosquitto_publish(m_mosquitto, nullptr, topic.c_str(),
-                               payload.size(), payload.data(), int(qos), false);
+//-----------------------------------------------------------------------------
+bool MQTT::publish(MQTT::Topic& topic, std::string const& payload, QoS const qos)
+{
+    const uint8_t* p = reinterpret_cast<const uint8_t*>(&payload[0]);
+    return publish(topic, p, payload.size(), qos);
+}
+
+//-----------------------------------------------------------------------------
+bool MQTT::unsubscribe(MQTT::Topic& topic)
+{
+    int rc = mosquitto_unsubscribe(m_mosquitto, &topic.id, topic.name.c_str());
     if (rc != MOSQ_ERR_SUCCESS)
     {
-        m_error = mosquitto_strerror(rc);
+        m_error = make_error_code(rc);
         return false;
     }
+
+    m_callbacks.reception.erase(topic.name);
     return true;
 }
 
 //-----------------------------------------------------------------------------
-bool MQTT::publish(std::string const& topic, std::string const& payload, QoS const qos)
+bool MQTT::subscribe(MQTT::Topic& topic, QoS const qos,
+                     MQTT::ReceptionCallback onMessageReceived)
 {
-    assert((topic.size() != 0u) && "topic name shall not be empty");
-
-    // We exploit the fact that mosquitto appends an extra 0 bytes that makes
-    // ad direct reading as a C string.
-    int rc = mosquitto_publish(m_mosquitto, nullptr, topic.c_str(),
-                               payload.size(), payload.data(), int(qos), false);
-    if (rc != MOSQ_ERR_SUCCESS)
+    if (topic.name.size() == 0u)
     {
-        m_error = mosquitto_strerror(rc);
+        m_error = make_error_code(MOSQ_ERR_INVAL, "topic name shall not be empty");
         return false;
     }
+
+    int rc = mosquitto_subscribe(m_mosquitto, &topic.id, topic.name.c_str(), int(qos));
+    if (rc != MOSQ_ERR_SUCCESS)
+    {
+        m_error = make_error_code(rc);
+        return false;
+    }
+
+    m_callbacks.reception[topic.name] = onMessageReceived;
     return true;
 }
 
 //-----------------------------------------------------------------------------
-bool MQTT::unsubscribe(std::string const& topic)
+void MQTT::on_message_received_wrapper(struct mosquitto* /*mosqitto*/,
+                      void *userdata, const struct mosquitto_message *msg)
 {
-    assert((topic.size() != 0u) && "topic name shall not be empty");
+    MQTT* mqtt = static_cast<MQTT*>(userdata);
+    assert((mqtt != nullptr) && "NULL pointer passed as param");
+    MQTT::Message const& message = *reinterpret_cast<const MQTT::Message*>(msg);
 
-    int rc = mosquitto_unsubscribe(m_mosquitto, nullptr, topic.c_str());
-    if (rc != MOSQ_ERR_SUCCESS)
+    auto const& callback = mqtt->m_callbacks.reception.find(message.topic);
+    if ((callback != mqtt->m_callbacks.reception.end()) &&
+        (callback->second != nullptr))
     {
-        m_error = mosquitto_strerror(rc);
-        return false;
+        callback->second(message);
     }
-
-    m_callbacks.erase(topic);
-    return true;
-}
-
-//-----------------------------------------------------------------------------
-bool MQTT::subscribe(std::string const& topic, QoS const qos)
-{
-    assert((topic.size() != 0u) && "topic name shall not be empty");
-
-    int rc = mosquitto_subscribe(m_mosquitto, nullptr, topic.c_str(), int(qos));
-    if (rc != MOSQ_ERR_SUCCESS)
+    else
     {
-        m_error = mosquitto_strerror(rc);
-        return false;
-    }
-
-    return true;
-}
-
-//-----------------------------------------------------------------------------
-bool MQTT::subscribe(std::string const& topic, Callback callback, QoS const qos)
-{
-    if (subscribe(topic, qos))
-    {
-        m_callbacks[topic] = callback;
-        return true;
-    }
-
-    return false;
-}
-
-//-----------------------------------------------------------------------------
-void MQTT::onMessageReceived(MQTT::Message const& msg)
-{
-    auto const& callback = m_callbacks.find(msg.topic);
-    if (callback != m_callbacks.end())
-    {
-        callback->second(msg);
+        mqtt->onMessageReceived(message);
     }
 }
