@@ -60,7 +60,7 @@ static std::error_code make_error_code(int ec, std::string const& message)
 }
 
 //-----------------------------------------------------------------------------
-bool MQTT::libMosquittoInit()
+bool MQTT::libMosquittoInit(MQTT::Protocol protocol)
 {
     size_t& counter = libMosquittoCountInstances();
     if (++counter > 1u)
@@ -75,6 +75,24 @@ bool MQTT::libMosquittoInit()
         m_error = make_error_code(rc);
         return false;
     }
+
+    mosquitto_lib_version(&m_version.mosquitto[0], &m_version.mosquitto[1], &m_version.mosquitto[2]);
+    switch (protocol)
+    {
+        case MQTT::Protocol::V5:
+            mosquitto_int_option(m_mosquitto, MOSQ_OPT_PROTOCOL_VERSION, MQTT_PROTOCOL_V5);
+            m_version.protocol[0] = 5; m_version.protocol[1] = 0;  m_version.protocol[2] = 0;
+            break;
+        case MQTT::Protocol::V311:
+            mosquitto_int_option(m_mosquitto, MOSQ_OPT_PROTOCOL_VERSION, MQTT_PROTOCOL_V311);
+            m_version.protocol[0] = 3; m_version.protocol[1] = 1;  m_version.protocol[2] = 1;
+            break;
+        case MQTT::Protocol::V31:
+            mosquitto_int_option(m_mosquitto, MOSQ_OPT_PROTOCOL_VERSION, MQTT_PROTOCOL_V31);
+            m_version.protocol[0] = 3; m_version.protocol[1] = 1;  m_version.protocol[2] = 0;
+            break;
+    }
+
     return true;
 }
 
@@ -112,16 +130,11 @@ void MQTT::libMosquittoCleanUp()
 //-----------------------------------------------------------------------------
 MQTT::MQTT(MQTT::Settings const& settings)
 {
-    if (settings.client_id.size() > 23u)
-    {
-        m_error = make_error_code(MOSQ_ERR_INVAL,
-            "Invalid number of char defining the client ID");
-    }
-    else if (libMosquittoInit())
+    if (libMosquittoInit(settings.protocol))
     {
         instantiate(settings.client_id.size() == 0u ? nullptr :
                     settings.client_id.c_str(), 
-                    settings.clean_session == MQTT::Settings::CLEAN_SESSION);
+                    settings.clean_session == MQTT::Session::Cleanup);
     }
 }
 
@@ -161,8 +174,8 @@ bool MQTT::connect(Connection const settings, MQTT::ConnectionCallback onConnect
     if (m_status == MQTT::Status::CONNECTED)
         return true;
 
-    m_callbacks.connection = onConnected;
-    m_callbacks.disconnection = onDisconnected;
+    m_callbacks.connection = std::move(onConnected);
+    m_callbacks.disconnection = std::move(onDisconnected);
     int rc = mosquitto_connect(m_mosquitto, settings.address.c_str(),
                                int(settings.port), int(settings.timeout.count()));
     if (rc != MOSQ_ERR_SUCCESS)
@@ -232,8 +245,8 @@ bool MQTT::publish(MQTT::Topic& topic, const uint8_t* payload, size_t const size
         return false;
     }
 
-    int rc = mosquitto_publish(m_mosquitto, &topic.id, topic.name.c_str(), size,
-                               payload, int(qos), false);
+    int rc = mosquitto_publish(m_mosquitto, &topic.id, topic.name.c_str(), int(size), payload,
+                               int(qos), topic.retain);
     if (rc != MOSQ_ERR_SUCCESS)
     {
         m_error = make_error_code(rc);
@@ -253,7 +266,7 @@ bool MQTT::publish(MQTT::Topic& topic, std::vector<uint8_t> const& payload,
 bool MQTT::publish(MQTT::Topic& topic, std::string const& payload, QoS const qos)
 {
     const uint8_t* p = reinterpret_cast<const uint8_t*>(&payload[0]);
-    return publish(topic, p, payload.size(), qos);
+    return publish(topic, p, payload.size() + 1u, qos);
 }
 
 //-----------------------------------------------------------------------------
@@ -287,7 +300,7 @@ bool MQTT::subscribe(MQTT::Topic& topic, QoS const qos,
         return false;
     }
 
-    m_callbacks.reception[topic.name] = onMessageReceived;
+    m_callbacks.reception[topic.name] = std::move(onMessageReceived);
     return true;
 }
 

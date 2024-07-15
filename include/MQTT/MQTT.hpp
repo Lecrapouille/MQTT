@@ -71,22 +71,71 @@ class MQTT
 public:
 
     //-------------------------------------------------------------------------
+    //! \brief MQTT Protocol version (3.1.1 is the default).
+    //-------------------------------------------------------------------------
+    enum class Protocol
+    {
+        V5, V311, V31
+    };
+
+    //-------------------------------------------------------------------------
+    //! \brief Will the broker preserve or clean client subscriptions and
+    //! messages when the client disconnect.
+    //-------------------------------------------------------------------------
+    enum class Session
+    {
+        //! \brief Preserve all messages and subscriptions on disconnect.
+        Preserve,
+        //! \brief Clean all messages and subscriptions on disconnect.
+        Cleanup
+    };
+
+    //-------------------------------------------------------------------------
+    //! \brief Quality of service for message delivery.
+    //-------------------------------------------------------------------------
+    enum class QoS
+    {
+        QoS0, //! \brief At most once
+        QoS1, //! \brief At least once
+        QoS2  //! \brief Exactly once
+    };
+
+    //-------------------------------------------------------------------------
+    //! \brief Status of the MQTT client.
+    //-------------------------------------------------------------------------
+    enum class Status
+    {
+        DISCONNECTED, //! \brief Not connected to the MQTT broker.
+        CONNECTED,    //! \brief Connected to the MQTT broker.
+        IN_DEFECT     //! \brief Fatal internal MQTT failure.
+    };
+
+    //-------------------------------------------------------------------------
+    //! \brief
+    //-------------------------------------------------------------------------
+    struct Version
+    {
+        //! \brief Return the mosquitto C library version.
+        int mosquitto[3] = {0, 0, 0};
+        //! \brief Return the C++ wrapper version.
+        int wrapper[3] = {0, 2, 0};
+        //! \brief Protocol version.
+        int protocol[3] = {0, 0, 0};
+    };
+
+    //-------------------------------------------------------------------------
     //! \brief Settings used for the creation of MQTT client.
     //-------------------------------------------------------------------------
     struct Settings
     {
         //! \brief The client ID that shall be unique for the MQTT broker.
         //! Let it dummy to let the MQTT broker generate a random name.
-        //! \note The lenght shall be > 1 and < 23.
         std::string client_id;
+        //! \brief MQTT protocol version.
+        MQTT::Protocol protocol = MQTT::Protocol::V5;
         //! \brief Will the broker reserve or clean all client messages and
         //! subscriptions when the client disconnect.
-        enum {
-            //! \brief The broker preserves all messages and subscriptions on disconnect.
-            PRESERVE_SESSION,
-            //! \brief The broker will clean all messages and subscriptions on disconnect.
-            CLEAN_SESSION
-        } clean_session = CLEAN_SESSION;
+        MQTT::Session clean_session = MQTT::Session::Cleanup;
     };
 
     //-------------------------------------------------------------------------
@@ -103,24 +152,6 @@ public:
     };
 
     //-------------------------------------------------------------------------
-    //! \brief Quality of service for message delivery.
-    //-------------------------------------------------------------------------
-    enum class QoS {
-        QoS0, //! \brief At most once
-        QoS1, //! \brief At least once
-        QoS2  //! \brief Exactly once
-    };
-
-    //-------------------------------------------------------------------------
-    //! \brief Status of the MQTT client.
-    //-------------------------------------------------------------------------
-    enum class Status {
-        DISCONNECTED, //! \brief Not connected to the MQTT broker.
-        CONNECTED,    //! \brief Connected to the MQTT broker.
-        IN_DEFECT     //! \brief Fatal internal MQTT failure.
-    };
-
-    //-------------------------------------------------------------------------
     //! \brief An MQTT topic is and identifier used by the broker to filter
     //! messages from connected clients.
     //-------------------------------------------------------------------------
@@ -128,6 +159,8 @@ public:
     {
         //! \brief Name of the topic.
         std::string name;
+        //! \brief Retain ?
+        bool retain = false;
         //! \brief Unique Id set during the subscription.
         int id = 0;
     };
@@ -199,13 +232,18 @@ public:
     //-------------------------------------------------------------------------
     //! \brief
     //-------------------------------------------------------------------------
-    MQTT(MQTT::Settings const& settings = {"", MQTT::Settings::CLEAN_SESSION});
+    MQTT(MQTT::Settings const& settings = {"", MQTT::Protocol::V5, MQTT::Session::Cleanup});
 
     //-------------------------------------------------------------------------
     //! \brief Release memory. Clean up of the mosquitto library if no other
     //! clients is using the mosquitto library.
     //-------------------------------------------------------------------------
     virtual ~MQTT();
+
+    //-------------------------------------------------------------------------
+    //! \brief Return
+    //-------------------------------------------------------------------------
+    MQTT::Version const& version() const { return m_version; }
 
     //-------------------------------------------------------------------------
     //! \brief Return the current client status.
@@ -216,6 +254,11 @@ public:
     //! \brief Return the last error.
     //-------------------------------------------------------------------------
     std::error_code const& error() const { return m_error; }
+
+    //-------------------------------------------------------------------------
+    //! \brief Return the last error.
+    //-------------------------------------------------------------------------
+    static std::string error(int const ec) { return mosquitto_strerror(ec); }
 
     //-------------------------------------------------------------------------
     //! \brief Non blocking connection to the MQTT broker as random client id.
@@ -384,7 +427,7 @@ private:
     }
 
     //! \brief To be called before using MQTT. Init the C library.
-    bool libMosquittoInit();
+    bool libMosquittoInit(MQTT::Protocol protocol);
 
     //! \brief To be called when MQTT is no longer used. Clean the C library.
     void libMosquittoCleanUp();
@@ -393,6 +436,8 @@ private:
 
     //! \brief The instance of the mosquitto library.
     struct mosquitto *m_mosquitto = nullptr;
+    //!
+    Version m_version;
 
     struct {
         //! \brief Callbacks when a message has been received.
@@ -404,7 +449,7 @@ private:
     //! \brief Hold the last error.
     std::error_code m_error;
     //! \brief Hold the connection status.
-    std::atomic<MQTT::Status> m_status;
+    std::atomic<MQTT::Status> m_status{MQTT::Status::DISCONNECTED};
 };
 
 //-----------------------------------------------------------------------------
